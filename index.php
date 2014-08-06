@@ -30,6 +30,7 @@ $exit_on_error = 1;
 $copytype = 'folder';
 $oldPath = '/';
 $firstPass = true;
+$workflowDefinitionsArray = array();
 ob_implicit_flush(true);
 ob_end_flush();
 ?>
@@ -42,7 +43,13 @@ ob_end_flush();
 if (!empty($_POST) && validateInput()) {
     showForm();
     echo "<pre>First pass...\n";
+    
+    // Copy the assets
     update();
+    
+    // Apple workflows to folders
+    applyWorkflows();
+    
     echo "</pre>";
 	$firstPass = false;
 	echo "<pre>Second pass...\n";
@@ -1168,6 +1175,36 @@ if ($verbose>2) echo "Checking $type $path...\n";
 	$newId[$ident->id] = $writeClient->createdAssetId;
 #echo "Created $type " . $newId[$ident->id] . "\n";
 	remember($ident);
+
+	// check to see if the folder has a workflow
+	$workflowSettingsParams->type = $type;
+	$workflowSettingsParams->path = $path;
+	$workflowSettingsParams->identifier = $workflowSettingsParams;
+
+	try {		   
+		$readClient->readWorkflowSettings($workflowSettingsParams);
+		unset($readClient->response->readWorkflowSettingsReturn->workflowSettings->identifier->id);
+		unset($readClient->response->readWorkflowSettingsReturn->workflowSettings->workflowDefinitions->assetIdentifier->id);
+		
+		$workflowSettings = $readClient->response->readWorkflowSettingsReturn->workflowSettings;
+		$workflow = $workflowSettings->workflowDefinitions;
+		
+		// if nothing is in the object then the folder doesn't have a workflow
+		if(count(get_object_vars($workflow)) == 0 || count(get_object_vars($workflow->assetIdentifier)) == 0){
+			
+		} else {
+			// put the workflow in an array to process later (after workflows have been created)
+			$workflowPath = $workflow->assetIdentifier->path->path;
+			$editWorkflowSettingsParams->workflowSettings = $workflowSettings;
+			$editWorkflowSettingsParams->applyInheritWorkflowsToChildren = true;
+			$editWorkflowSettingsParams->applyRequireWorkflowToChildren = true;
+			array_push($workflowDefinitionsArray, $editWorkflowSettingsParams);
+			
+		}
+	} catch(Exception $e) {
+		print_r($e);
+	}
+		
       } else {
 	echo "\nFailed: $type " . getPath($path) . "\n";
 	print_r($asset);
@@ -1176,6 +1213,37 @@ if ($verbose>2) echo "Checking $type $path...\n";
       }
     }
 }
+
+// loop through the workflowDefinitionsArray and add the workflows to folders
+function applyWorkflows() {
+	global $readClient, $writeClient;
+	global $oldPath, $newPath;
+	global $oldSite, $newSite;
+	global $skipPattern;
+	global $dryrun;
+	global $verbose;
+	global $checked;
+	global $exit_on_error;
+	global $newId;
+	global $assetCount;
+	global $workflowDefinitionsArray;
+	
+	foreach($workflowDefinitionsArray as $editWorkflowSettingsParams) {
+		try {		   
+			$writeClient->editWorkflowSettings($editWorkflowSettingsParams->workflowSettings, $editWorkflowSettingsParams->applyInheritWorkflowsToChildren, $editWorkflowSettingsParams->applyRequireWorkflowToChildren);
+			if($writeClient->response->editWorkflowSettingsReturn->success == "true") {
+				if ($verbose>2) echo "Added workflow (".$editWorkflowSettingsParams->workflowSettings->workflowDefinitions->assetIdentifier->path->path.") to folder " . $editWorkflowSettingsParams->workflowSettings->identifier->path->path . "\n";		
+			} else {
+				if ($verbose>2) print_r($writeClient->response);
+			}
+			
+		} catch(Exception $e) {
+			print_r($e);
+		}
+	}
+}
+
+
 
 function checkAdminAsset($id,$path,$type) {
   global $readClient, $writeClient;
